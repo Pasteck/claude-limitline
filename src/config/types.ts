@@ -28,13 +28,17 @@ export interface BudgetConfig {
 }
 
 export interface DisplayConfig {
-  style?: "powerline" | "minimal" | "capsule";
+  style?: "powerline" | "minimal" | "capsule" | "plain";
   useNerdFonts?: boolean;
   compactMode?: "auto" | "always" | "never";  // Auto-compact when terminal is narrow
   compactWidth?: number;  // Terminal width threshold for compact mode (default 80)
 }
 
-export type SegmentName = "directory" | "git" | "model" | "block" | "weekly" | "context";
+export type SegmentName = "directory" | "git" | "model" | "block" | "weekly" | "context" | "cost";
+
+export interface CostSegmentConfig extends SimpleSegmentConfig {
+  showSession?: boolean;  // Show session cost (5h) vs total cost
+}
 
 export interface LimitlineConfig {
   display?: DisplayConfig;
@@ -44,6 +48,7 @@ export interface LimitlineConfig {
   block?: BlockSegmentConfig;
   weekly?: WeeklySegmentConfig;
   context?: SimpleSegmentConfig;    // Show context window usage (right side)
+  cost?: CostSegmentConfig;         // Show estimated cost
   budget?: BudgetConfig;
   theme?: string;
   segmentOrder?: SegmentName[];     // Custom order for segments
@@ -81,6 +86,10 @@ export const DEFAULT_CONFIG: LimitlineConfig = {
   },
   context: {
     enabled: true,
+  },
+  cost: {
+    enabled: false,  // Disabled by default
+    showSession: true,
   },
   budget: {
     pollInterval: 15,

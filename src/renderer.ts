@@ -3,6 +3,7 @@ import { getTheme, ansi, type ColorTheme, type SegmentColor } from "./themes/ind
 import { type LimitlineConfig, type SegmentName } from "./config/index.js";
 import { type BlockInfo } from "./segments/block.js";
 import { type WeeklyInfo } from "./segments/weekly.js";
+import { type CostInfo } from "./segments/cost.js";
 import { type EnvironmentInfo } from "./utils/environment.js";
 import { type TrendInfo } from "./utils/oauth.js";
 import { getTerminalWidth } from "./utils/terminal.js";
@@ -33,6 +34,7 @@ interface Segment {
 interface RenderContext {
   blockInfo: BlockInfo | null;
   weeklyInfo: WeeklyInfo | null;
+  costInfo: CostInfo | null;
   envInfo: EnvironmentInfo;
   trendInfo: TrendInfo | null;
   compact: boolean;
@@ -170,6 +172,23 @@ export class Renderer {
     return segments
       .map(seg => ansi.bg(seg.colors.bg) + ansi.fg(seg.colors.fg) + seg.text + RESET_CODE)
       .join(` ${this.symbols.separator} `);
+  }
+
+  private renderPlain(segments: Segment[]): string {
+    // Plain text mode: no background colors, just colored text with · separator
+    // Rename labels: BLK -> 5h, WK -> 7d, CTX -> Ctx
+    return segments
+      .map(seg => {
+        let text = seg.text.trim();
+        // Rename labels to be more intuitive
+        text = text.replace(/^BLK\s+/, '5h: ');
+        text = text.replace(/^WK\s+/, '7d: ');
+        text = text.replace(/^CTX\s+/, 'Ctx: ');
+        text = text.replace(/^All\s*/, '');
+        text = text.replace(/^So\s*/, 'So: ');
+        return ansi.fg(seg.colors.fg) + text + RESET_CODE;
+      })
+      .join(" | ");
   }
 
   private renderDirectory(ctx: RenderContext): Segment | null {
@@ -389,6 +408,34 @@ export class Renderer {
     };
   }
 
+  private renderCost(ctx: RenderContext): Segment | null {
+    if (!this.config.cost?.enabled || !ctx.costInfo) {
+      return null;
+    }
+
+    const showSession = this.config.cost.showSession ?? true;
+    const cost = showSession ? ctx.costInfo.sessionCost : ctx.costInfo.totalCost;
+    const tokens = showSession ? ctx.costInfo.sessionTokens : ctx.costInfo.totalTokens;
+
+    // Format cost: $0.00 for small, $1.23 for normal
+    const costStr = cost < 0.01 ? "$0.00" : `$${cost.toFixed(2)}`;
+
+    // Format tokens: 1.2M, 500k, etc.
+    let tokenStr: string;
+    if (tokens >= 1_000_000) {
+      tokenStr = `${(tokens / 1_000_000).toFixed(1)}M`;
+    } else if (tokens >= 1_000) {
+      tokenStr = `${(tokens / 1_000).toFixed(0)}k`;
+    } else {
+      tokenStr = `${tokens}`;
+    }
+
+    return {
+      text: ` ${costStr} (${tokenStr}) `,
+      colors: this.theme.block,  // Use block colors for cost
+    };
+  }
+
   private getSegment(name: SegmentName, ctx: RenderContext): Segment | null {
     switch (name) {
       case "directory":
@@ -403,6 +450,8 @@ export class Renderer {
         return this.renderWeekly(ctx);
       case "context":
         return this.renderContext(ctx);
+      case "cost":
+        return this.renderCost(ctx);
       default:
         return null;
     }
@@ -412,12 +461,14 @@ export class Renderer {
     blockInfo: BlockInfo | null,
     weeklyInfo: WeeklyInfo | null,
     envInfo: EnvironmentInfo,
-    trendInfo: TrendInfo | null = null
+    trendInfo: TrendInfo | null = null,
+    costInfo: CostInfo | null = null
   ): string {
     const compact = this.isCompactMode();
     const ctx: RenderContext = {
       blockInfo,
       weeklyInfo,
+      costInfo,
       envInfo,
       trendInfo,
       compact,
@@ -445,8 +496,15 @@ export class Renderer {
 
     // Render both sides
     let output = "";
+    const style = this.config.display?.style ?? "powerline";
 
-    if (this.usePowerline) {
+    if (style === "plain") {
+      // Plain text mode: no backgrounds, simple | separators
+      const allSegments = [...leftSegments, ...rightSegments];
+      if (allSegments.length > 0) {
+        output = this.renderPlain(allSegments);
+      }
+    } else if (this.usePowerline) {
       if (leftSegments.length > 0) {
         output += this.renderPowerline(leftSegments);
       }
