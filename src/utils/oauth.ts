@@ -7,6 +7,90 @@ import { debug } from "./logger.js";
 
 const execAsync = promisify(exec);
 
+// File-based cache for cross-process sharing
+const CACHE_DIR = path.join(os.homedir(), ".cache", "claude-limitline");
+const USAGE_CACHE_FILE = path.join(CACHE_DIR, "usage-cache.json");
+const TOKEN_CACHE_FILE = path.join(CACHE_DIR, "token-cache.json");
+
+interface FileCacheData {
+  data: OAuthUsageResponse;
+  timestamp: number;
+  previousData?: OAuthUsageResponse;
+}
+
+function ensureCacheDir(): void {
+  if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
+  }
+}
+
+function readFileCache(): FileCacheData | null {
+  try {
+    if (fs.existsSync(USAGE_CACHE_FILE)) {
+      const content = fs.readFileSync(USAGE_CACHE_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      // Restore Date objects
+      if (parsed.data) {
+        for (const key of ["fiveHour", "sevenDay", "sevenDayOpus", "sevenDaySonnet"]) {
+          if (parsed.data[key]?.resetAt) {
+            parsed.data[key].resetAt = new Date(parsed.data[key].resetAt);
+          }
+        }
+        if (parsed.previousData) {
+          for (const key of ["fiveHour", "sevenDay", "sevenDayOpus", "sevenDaySonnet"]) {
+            if (parsed.previousData[key]?.resetAt) {
+              parsed.previousData[key].resetAt = new Date(parsed.previousData[key].resetAt);
+            }
+          }
+        }
+      }
+      return parsed;
+    }
+  } catch (error) {
+    debug("Failed to read file cache:", error);
+  }
+  return null;
+}
+
+function writeFileCache(data: OAuthUsageResponse, previousData?: OAuthUsageResponse): void {
+  try {
+    ensureCacheDir();
+    const cacheData: FileCacheData = {
+      data,
+      timestamp: Date.now(),
+      previousData,
+    };
+    fs.writeFileSync(USAGE_CACHE_FILE, JSON.stringify(cacheData), { mode: 0o600 });
+  } catch (error) {
+    debug("Failed to write file cache:", error);
+  }
+}
+
+function readTokenCache(): string | null {
+  try {
+    if (fs.existsSync(TOKEN_CACHE_FILE)) {
+      const content = fs.readFileSync(TOKEN_CACHE_FILE, "utf-8");
+      const parsed = JSON.parse(content);
+      // Token cache valid for 1 hour
+      if (parsed.token && parsed.timestamp && Date.now() - parsed.timestamp < 3600000) {
+        return parsed.token;
+      }
+    }
+  } catch (error) {
+    debug("Failed to read token cache:", error);
+  }
+  return null;
+}
+
+function writeTokenCache(token: string): void {
+  try {
+    ensureCacheDir();
+    fs.writeFileSync(TOKEN_CACHE_FILE, JSON.stringify({ token, timestamp: Date.now() }), { mode: 0o600 });
+  } catch (error) {
+    debug("Failed to write token cache:", error);
+  }
+}
+
 interface UsageData {
   resetAt: Date;
   percentUsed: number;
@@ -146,21 +230,8 @@ async function getOAuthTokenMacOS(): Promise<string | null> {
 }
 
 async function getOAuthTokenLinux(): Promise<string | null> {
-  // Try secret-tool (GNOME Keyring)
-  try {
-    const { stdout } = await execAsync(
-      `secret-tool lookup service "Claude Code"`,
-      { timeout: 5000 }
-    );
-    const token = stdout.trim();
-    if (token && token.startsWith("sk-ant-oat")) {
-      return token;
-    }
-  } catch (error) {
-    debug("Linux secret-tool retrieval failed:", error);
-  }
-
-  // Try config file locations
+  // OPTIMIZED: Try config files FIRST (fast, no subprocess)
+  // Skip secret-tool on headless servers - it always fails and wastes 5 seconds
   const configPaths = [
     path.join(os.homedir(), ".claude", ".credentials.json"),
     path.join(os.homedir(), ".claude", "credentials.json"),
@@ -194,6 +265,21 @@ async function getOAuthTokenLinux(): Promise<string | null> {
     } catch (error) {
       debug(`Failed to read config from ${configPath}:`, error);
     }
+  }
+
+  // Only try secret-tool as last resort (for desktop Linux with GNOME Keyring)
+  // Use a short timeout since this usually fails on servers
+  try {
+    const { stdout } = await execAsync(
+      `secret-tool lookup service "Claude Code"`,
+      { timeout: 1000 }  // Reduced from 5000ms to 1000ms
+    );
+    const token = stdout.trim();
+    if (token && token.startsWith("sk-ant-oat")) {
+      return token;
+    }
+  } catch (error) {
+    debug("Linux secret-tool retrieval failed (expected on headless servers):", error);
   }
 
   return null;
@@ -311,35 +397,66 @@ export async function getRealtimeUsage(
   pollIntervalMinutes: number = 15
 ): Promise<OAuthUsageResponse | null> {
   const now = Date.now();
-  const cacheAgeMs = now - cacheTimestamp;
   const pollIntervalMs = pollIntervalMinutes * 60 * 1000;
 
-  // Return cached data if still fresh
-  if (cachedUsage && cacheAgeMs < pollIntervalMs) {
-    debug(`Using cached usage data (age: ${Math.round(cacheAgeMs / 1000)}s)`);
+  // Try memory cache first (same process)
+  const memoryCacheAge = now - cacheTimestamp;
+  if (cachedUsage && memoryCacheAge < pollIntervalMs) {
+    debug(`Using memory cached usage data (age: ${Math.round(memoryCacheAge / 1000)}s)`);
     return cachedUsage;
   }
 
-  // Get token if not cached
-  if (!cachedToken) {
-    cachedToken = await getOAuthToken();
-    if (!cachedToken) {
-      debug("Could not retrieve OAuth token for realtime usage");
-      return null;
+  // Try file cache (cross-process sharing) - THIS IS THE KEY OPTIMIZATION
+  const fileCache = readFileCache();
+  if (fileCache) {
+    const fileCacheAge = now - fileCache.timestamp;
+    if (fileCacheAge < pollIntervalMs) {
+      debug(`Using file cached usage data (age: ${Math.round(fileCacheAge / 1000)}s)`);
+      // Load into memory cache for subsequent calls in same process
+      cachedUsage = fileCache.data;
+      previousUsage = fileCache.previousData || null;
+      cacheTimestamp = fileCache.timestamp;
+      return cachedUsage;
     }
   }
 
-  // Fetch fresh data
+  // Get token - try file cache first, then fetch
+  if (!cachedToken) {
+    cachedToken = readTokenCache();
+    if (!cachedToken) {
+      cachedToken = await getOAuthToken();
+      if (cachedToken) {
+        writeTokenCache(cachedToken);
+      } else {
+        debug("Could not retrieve OAuth token for realtime usage");
+        // Return stale file cache if available (better than nothing)
+        if (fileCache) {
+          debug("Returning stale cache as fallback");
+          return fileCache.data;
+        }
+        return null;
+      }
+    }
+  }
+
+  // Fetch fresh data from API
   const usage = await fetchUsageFromAPI(cachedToken);
   if (usage) {
     // Store previous for trend tracking before updating
     previousUsage = cachedUsage;
     cachedUsage = usage;
     cacheTimestamp = now;
-    debug("Refreshed realtime usage cache");
+    // Write to file cache for other processes
+    writeFileCache(usage, previousUsage || undefined);
+    debug("Refreshed realtime usage cache (memory + file)");
   } else {
     // Token might be expired, clear it for retry next time
     cachedToken = null;
+    // Return stale cache if available
+    if (fileCache) {
+      debug("API failed, returning stale cache as fallback");
+      return fileCache.data;
+    }
   }
 
   return usage;
@@ -350,4 +467,45 @@ export function clearUsageCache(): void {
   previousUsage = null;
   cacheTimestamp = 0;
   cachedToken = null;
+}
+
+/**
+ * Read-only cache access for background refresh mode
+ * This function NEVER makes API calls - it only reads from file cache
+ * Use this in statusLine to guarantee zero blocking
+ */
+export function getUsageFromCacheOnly(): OAuthUsageResponse | null {
+  // Try memory cache first (same process)
+  if (cachedUsage) {
+    debug("Using memory cached usage data (cache-only mode)");
+    return cachedUsage;
+  }
+
+  // Read from file cache (written by background refresh script)
+  const fileCache = readFileCache();
+  if (fileCache) {
+    // Load into memory cache for subsequent calls
+    cachedUsage = fileCache.data;
+    previousUsage = fileCache.previousData || null;
+    cacheTimestamp = fileCache.timestamp;
+
+    const age = Math.round((Date.now() - fileCache.timestamp) / 1000);
+    debug(`Using file cached usage data (cache-only mode, age: ${age}s)`);
+    return cachedUsage;
+  }
+
+  debug("No cache available (cache-only mode)");
+  return null;
+}
+
+/**
+ * Check if cache is stale (older than threshold)
+ * Returns age in seconds, or -1 if no cache
+ */
+export function getCacheAge(): number {
+  const fileCache = readFileCache();
+  if (fileCache) {
+    return Math.round((Date.now() - fileCache.timestamp) / 1000);
+  }
+  return -1;
 }

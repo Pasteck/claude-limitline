@@ -31,15 +31,17 @@ async function main(): Promise<void> {
 
     // Get data
     const pollInterval = config.budget?.pollInterval ?? 15;
+    const backgroundRefresh = config.budget?.backgroundRefresh ?? false;
 
     const [blockInfo, weeklyInfo, costInfo] = await Promise.all([
-      config.block?.enabled ? blockProvider.getBlockInfo(pollInterval) : null,
+      config.block?.enabled ? blockProvider.getBlockInfo(pollInterval, backgroundRefresh) : null,
       config.weekly?.enabled
         ? weeklyProvider.getWeeklyInfo(
             config.budget?.resetDay,
             config.budget?.resetHour,
             config.budget?.resetMinute,
-            pollInterval
+            pollInterval,
+            backgroundRefresh
           )
         : null,
       config.cost?.enabled ? costProvider.getCostInfo(config.cost.timeRange ?? "month") : null,

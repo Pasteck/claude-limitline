@@ -25,6 +25,7 @@ export interface BudgetConfig {
   resetHour?: number;    // 0-23
   resetMinute?: number;  // 0-59
   warningThreshold?: number; // percentage to show warning color
+  backgroundRefresh?: boolean; // if true, statusLine only reads cache (use cron to refresh)
 }
 
 export interface DisplayConfig {

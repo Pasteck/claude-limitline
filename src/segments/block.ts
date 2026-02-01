@@ -1,5 +1,5 @@
 import { debug } from "../utils/logger.js";
-import { getRealtimeUsage } from "../utils/oauth.js";
+import { getRealtimeUsage, getUsageFromCacheOnly } from "../utils/oauth.js";
 
 export interface BlockInfo {
   percentUsed: number | null;
@@ -9,9 +9,9 @@ export interface BlockInfo {
 }
 
 export class BlockProvider {
-  async getBlockInfo(pollInterval?: number): Promise<BlockInfo> {
+  async getBlockInfo(pollInterval?: number, backgroundRefresh?: boolean): Promise<BlockInfo> {
     // Try to get data from OAuth API (realtime mode)
-    const realtimeInfo = await this.getRealtimeBlockInfo(pollInterval);
+    const realtimeInfo = await this.getRealtimeBlockInfo(pollInterval, backgroundRefresh);
     if (realtimeInfo) {
       return realtimeInfo;
     }
@@ -27,10 +27,14 @@ export class BlockProvider {
   }
 
   private async getRealtimeBlockInfo(
-    pollInterval?: number
+    pollInterval?: number,
+    backgroundRefresh?: boolean
   ): Promise<BlockInfo | null> {
     try {
-      const usage = await getRealtimeUsage(pollInterval ?? 15);
+      // If backgroundRefresh is enabled, only read from cache (never block on API)
+      const usage = backgroundRefresh
+        ? getUsageFromCacheOnly()
+        : await getRealtimeUsage(pollInterval ?? 15);
       if (!usage || !usage.fiveHour) {
         debug("No realtime block usage data available");
         return null;
