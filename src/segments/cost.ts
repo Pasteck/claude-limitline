@@ -27,11 +27,12 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cacheWrite:
   "default": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
 };
 
+export type CostTimeRange = "5h" | "7d" | "month" | "all";
+
 export interface CostInfo {
-  totalCost: number;
-  sessionCost: number;  // Current 5-hour session
-  totalTokens: number;
-  sessionTokens: number;  // Current 5-hour session
+  cost: number;
+  tokens: number;
+  timeRange: CostTimeRange;
   isEstimate: boolean;
 }
 
@@ -86,7 +87,7 @@ function calculateEntryCost(entry: LogEntry): number {
 
 export class CostProvider {
   private cacheDir: string;
-  private cachedCost: CostInfo | null = null;
+  private cachedCost: Map<CostTimeRange, CostInfo> = new Map();
   private cacheTimestamp = 0;
   private readonly CACHE_TTL_MS = 60_000; // 1 minute cache
 
@@ -94,39 +95,49 @@ export class CostProvider {
     this.cacheDir = path.join(os.homedir(), ".claude", "projects");
   }
 
-  async getCostInfo(): Promise<CostInfo> {
+  private getTimeRangeCutoff(timeRange: CostTimeRange): Date | null {
+    const now = new Date();
+    switch (timeRange) {
+      case "5h":
+        return new Date(now.getTime() - 5 * 60 * 60 * 1000);
+      case "7d":
+        return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      case "month":
+        return new Date(now.getFullYear(), now.getMonth(), 1);
+      case "all":
+        return null;  // No cutoff
+    }
+  }
+
+  async getCostInfo(timeRange: CostTimeRange = "month"): Promise<CostInfo> {
     const now = Date.now();
 
     // Return cached if fresh
-    if (this.cachedCost && (now - this.cacheTimestamp) < this.CACHE_TTL_MS) {
-      return this.cachedCost;
+    const cached = this.cachedCost.get(timeRange);
+    if (cached && (now - this.cacheTimestamp) < this.CACHE_TTL_MS) {
+      return cached;
     }
 
     try {
-      const costInfo = await this.calculateCosts();
-      this.cachedCost = costInfo;
+      const costInfo = await this.calculateCosts(timeRange);
+      this.cachedCost.set(timeRange, costInfo);
       this.cacheTimestamp = now;
       return costInfo;
     } catch (error) {
       debug("Error calculating costs:", error);
-      return { totalCost: 0, sessionCost: 0, totalTokens: 0, sessionTokens: 0, isEstimate: true };
+      return { cost: 0, tokens: 0, timeRange, isEstimate: true };
     }
   }
 
-  private async calculateCosts(): Promise<CostInfo> {
+  private async calculateCosts(timeRange: CostTimeRange): Promise<CostInfo> {
     if (!fs.existsSync(this.cacheDir)) {
       debug("Claude projects directory not found");
-      return { totalCost: 0, sessionCost: 0, totalTokens: 0, sessionTokens: 0, isEstimate: true };
+      return { cost: 0, tokens: 0, timeRange, isEstimate: true };
     }
 
-    // Calculate start of current month
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
+    const cutoff = this.getTimeRangeCutoff(timeRange);
     let totalCost = 0;
-    let sessionCost = 0;  // Now means "this month"
     let totalTokens = 0;
-    let sessionTokens = 0;  // Now means "this month"
 
     // Find all JSONL files
     const jsonlFiles = this.findJsonlFiles(this.cacheDir);
@@ -144,6 +155,12 @@ export class CostProvider {
             // Skip non-message entries
             if (!entry.message?.usage) continue;
 
+            // Check if within time range
+            if (cutoff && entry.timestamp) {
+              const entryTime = new Date(entry.timestamp);
+              if (entryTime < cutoff) continue;
+            }
+
             const cost = calculateEntryCost(entry);
             const usage = entry.message!.usage!;
             const tokens = (usage.input_tokens || 0) + (usage.output_tokens || 0) +
@@ -151,15 +168,6 @@ export class CostProvider {
 
             totalCost += cost;
             totalTokens += tokens;
-
-            // Check if within current month
-            if (entry.timestamp) {
-              const entryTime = new Date(entry.timestamp);
-              if (entryTime >= monthStart) {
-                sessionCost += cost;
-                sessionTokens += tokens;
-              }
-            }
           } catch {
             // Skip invalid JSON lines
           }
@@ -169,8 +177,8 @@ export class CostProvider {
       }
     }
 
-    debug(`Total cost: $${totalCost.toFixed(2)}, Session cost: $${sessionCost.toFixed(2)}, Total tokens: ${totalTokens}, Session tokens: ${sessionTokens}`);
-    return { totalCost, sessionCost, totalTokens, sessionTokens, isEstimate: false };
+    debug(`Cost (${timeRange}): $${totalCost.toFixed(2)}, Tokens: ${totalTokens}`);
+    return { cost: totalCost, tokens: totalTokens, timeRange, isEstimate: false };
   }
 
   private findJsonlFiles(dir: string): string[] {

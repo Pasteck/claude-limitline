@@ -36,8 +36,10 @@ export interface DisplayConfig {
 
 export type SegmentName = "directory" | "git" | "model" | "block" | "weekly" | "context" | "cost";
 
+export type CostTimeRange = "5h" | "7d" | "month" | "all";
+
 export interface CostSegmentConfig extends SimpleSegmentConfig {
-  showSession?: boolean;  // Show session cost (5h) vs total cost
+  timeRange?: CostTimeRange;  // Time range for cost calculation: 5h, 7d, month, or all
 }
 
 export interface LimitlineConfig {
@@ -89,7 +91,7 @@ export const DEFAULT_CONFIG: LimitlineConfig = {
   },
   cost: {
     enabled: false,  // Disabled by default
-    showSession: true,
+    timeRange: "month",  // 5h, 7d, month, or all
   },
   budget: {
     pollInterval: 15,

@@ -413,9 +413,8 @@ export class Renderer {
       return null;
     }
 
-    const showSession = this.config.cost.showSession ?? true;
-    const cost = showSession ? ctx.costInfo.sessionCost : ctx.costInfo.totalCost;
-    const tokens = showSession ? ctx.costInfo.sessionTokens : ctx.costInfo.totalTokens;
+    const cost = ctx.costInfo.cost;
+    const tokens = ctx.costInfo.tokens;
 
     // Format cost: $0.00 for small, $1.23 for normal
     const costStr = cost < 0.01 ? "$0.00" : `$${cost.toFixed(2)}`;

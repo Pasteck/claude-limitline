@@ -42,7 +42,7 @@ async function main(): Promise<void> {
             pollInterval
           )
         : null,
-      config.cost?.enabled ? costProvider.getCostInfo() : null,
+      config.cost?.enabled ? costProvider.getCostInfo(config.cost.timeRange ?? "month") : null,
     ]);
 
     debug("Block info:", JSON.stringify(blockInfo));
