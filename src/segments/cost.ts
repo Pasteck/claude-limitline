@@ -119,11 +119,14 @@ export class CostProvider {
       return { totalCost: 0, sessionCost: 0, totalTokens: 0, sessionTokens: 0, isEstimate: true };
     }
 
-    const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    // Calculate start of current month
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
     let totalCost = 0;
-    let sessionCost = 0;
+    let sessionCost = 0;  // Now means "this month"
     let totalTokens = 0;
-    let sessionTokens = 0;
+    let sessionTokens = 0;  // Now means "this month"
 
     // Find all JSONL files
     const jsonlFiles = this.findJsonlFiles(this.cacheDir);
@@ -149,10 +152,10 @@ export class CostProvider {
             totalCost += cost;
             totalTokens += tokens;
 
-            // Check if within current session (5 hours)
+            // Check if within current month
             if (entry.timestamp) {
               const entryTime = new Date(entry.timestamp);
-              if (entryTime >= fiveHoursAgo) {
+              if (entryTime >= monthStart) {
                 sessionCost += cost;
                 sessionTokens += tokens;
               }
