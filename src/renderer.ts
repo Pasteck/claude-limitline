@@ -185,7 +185,7 @@ export class Renderer {
         text = text.replace(/^WK\s+/, '7d: ');
         text = text.replace(/^CTX\s+/, 'Ctx: ');
         text = text.replace(/^All\s*/, '');
-        text = text.replace(/^So\s*/, 'So: ');
+        text = text.replace(/^So(\d)/, 'So: $1');  // Only match "So" followed by digit, not "Sonnet"
         return ansi.fg(seg.colors.fg) + text + RESET_CODE;
       })
       .join(" | ");
