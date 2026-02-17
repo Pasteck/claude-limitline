@@ -98,13 +98,16 @@ export function formatModelName(modelId: string, displayName?: string): string {
   // Try to extract a friendly name from model ID
   const lower = modelId.toLowerCase();
 
+  // Claude models
   if (lower.includes("opus")) {
+    if (lower.includes("4-6") || lower.includes("4.6")) return "Opus 4.6";
     if (lower.includes("4-5") || lower.includes("4.5")) return "Opus 4.5";
     if (lower.includes("4")) return "Opus 4";
     if (lower.includes("3")) return "Opus 3";
     return "Opus";
   }
   if (lower.includes("sonnet")) {
+    if (lower.includes("4-5") || lower.includes("4.5")) return "Sonnet 4.5";
     if (lower.includes("4")) return "Sonnet 4";
     if (lower.includes("3-5") || lower.includes("3.5")) return "Sonnet 3.5";
     if (lower.includes("3")) return "Sonnet 3";
@@ -115,6 +118,42 @@ export function formatModelName(modelId: string, displayName?: string): string {
     return "Haiku";
   }
 
-  // Return truncated original if no mapping
-  return modelId.length > 15 ? modelId.slice(0, 15) : modelId;
+  // Third-party models (SiliconFlow / direct API format)
+  if (lower.includes("glm")) {
+    const glmMatch = modelId.match(/GLM[-_]?([\d.]+)/i);
+    const ver = glmMatch ? glmMatch[1] : "";
+    const suffix = lower.includes("code") ? " Code" : lower.includes("flash") ? "F" : "";
+    return `GLM-${ver}${suffix}` || "GLM";
+  }
+  if (lower.includes("deepseek")) {
+    const dsMatch = modelId.match(/[Dd]eep[Ss]eek[-_]?(V[\d.]+|R[\d.]+)/i);
+    if (dsMatch) return `DS ${dsMatch[1].toUpperCase()}`;
+    return "DeepSeek";
+  }
+  if (lower.includes("kimi")) {
+    const kimiMatch = modelId.match(/[Kk]imi[-_]?[Kk]([\d.]+)/);
+    return kimiMatch ? `Kimi K${kimiMatch[1]}` : "Kimi";
+  }
+  if (lower.includes("qwen")) {
+    // Qwen3.5-Plus etc. (Alibaba Cloud Bailian)
+    if (lower.includes("qwen3.5")) {
+      const suffix = lower.includes("plus") ? "+" : lower.includes("max") ? " Max" : "";
+      return `Qwen3.5${suffix}`;
+    }
+    // Qwen3-Coder etc. (SiliconFlow)
+    if (lower.includes("coder")) {
+      const verMatch = modelId.match(/[Qq]wen([\d.]+)/);
+      const sizeMatch = modelId.match(/(\d+)[Bb]/);
+      const ver = verMatch ? verMatch[1] : "";
+      const size = sizeMatch ? sizeMatch[1] + "B" : "";
+      return `Qwen${ver} ${size || "Coder"}`.trim();
+    }
+    // Generic Qwen
+    const verMatch = modelId.match(/[Qq]wen([\d.]+)/);
+    return verMatch ? `Qwen${verMatch[1]}` : "Qwen";
+  }
+
+  // Strip common vendor prefixes for unknown models
+  const stripped = modelId.replace(/^(Pro\/)?(zhipu|zai-org|deepseek-ai|moonshotai|Qwen)\//i, "");
+  return stripped.length > 15 ? stripped.slice(0, 13) + ".." : stripped;
 }

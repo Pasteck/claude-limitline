@@ -11,6 +11,7 @@ interface CostCacheData {
   cost: number;
   tokens: number;
   timeRange: CostTimeRange;
+  model: string;  // Current model when cache was created
   timestamp: number;
   processedFiles: Record<string, { mtime: number; cost: number; tokens: number }>;
 }
@@ -21,12 +22,13 @@ function ensureCacheDir(): void {
   }
 }
 
-function readCostCache(timeRange: CostTimeRange): CostCacheData | null {
+function readCostCache(timeRange: CostTimeRange, model: string): CostCacheData | null {
   try {
     if (fs.existsSync(COST_CACHE_FILE)) {
       const content = fs.readFileSync(COST_CACHE_FILE, "utf-8");
       const caches = JSON.parse(content) as Record<string, CostCacheData>;
-      return caches[timeRange] || null;
+      const cacheKey = `${timeRange}:${model}`;
+      return caches[cacheKey] || null;
     }
   } catch (error) {
     debug("Failed to read cost cache:", error);
@@ -34,7 +36,7 @@ function readCostCache(timeRange: CostTimeRange): CostCacheData | null {
   return null;
 }
 
-function writeCostCache(timeRange: CostTimeRange, data: CostCacheData): void {
+function writeCostCache(timeRange: CostTimeRange, model: string, data: CostCacheData): void {
   try {
     ensureCacheDir();
     let caches: Record<string, CostCacheData> = {};
@@ -45,22 +47,26 @@ function writeCostCache(timeRange: CostTimeRange, data: CostCacheData): void {
         // Ignore invalid cache
       }
     }
-    caches[timeRange] = data;
+    const cacheKey = `${timeRange}:${model}`;
+    caches[cacheKey] = data;
     fs.writeFileSync(COST_CACHE_FILE, JSON.stringify(caches), { mode: 0o600 });
   } catch (error) {
     debug("Failed to write cost cache:", error);
   }
 }
 
-// Model pricing per million tokens (as of 2025)
+// Model pricing per million tokens (USD)
 const MODEL_PRICING: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }> = {
-  // Opus 4.5
+  // === Claude (Anthropic) ===
+  // Opus 4.5 / 4.6
   "claude-opus-4-5-20251101": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   "claude-opus-4-5": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
+  "claude-opus-4-6": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   // Opus 4
   "claude-opus-4-20250514": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   "claude-opus-4": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
-  // Sonnet 4
+  // Sonnet 4 / 4.5
+  "claude-sonnet-4-5": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   "claude-sonnet-4-20250514": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   "claude-sonnet-4": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   // Sonnet 3.5 v2
@@ -72,6 +78,31 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cacheWrite:
   // Haiku 3
   "claude-3-haiku-20240307": { input: 0.25, output: 1.25, cacheWrite: 0.3, cacheRead: 0.03 },
   "claude-3-haiku": { input: 0.25, output: 1.25, cacheWrite: 0.3, cacheRead: 0.03 },
+
+  // === Third-party models (CNY pricing) ===
+  // Prices use ≥32K input tier (Claude Code typically exceeds 32K input)
+  // GLM (Z.AI / Zhipu) — SiliconFlow uses zai-org/ and Pro/ prefixes
+  "pro/zai-org/glm-5": { input: 4, output: 22, cacheWrite: 4, cacheRead: 4 },
+  "zhipu/glm-5": { input: 4, output: 22, cacheWrite: 4, cacheRead: 4 },           // alias
+  "pro/zai-org/glm-4.7": { input: 4, output: 16, cacheWrite: 4, cacheRead: 4 },
+  "zhipu/glm-4.7": { input: 4, output: 16, cacheWrite: 4, cacheRead: 4 },         // alias
+  "zhipu/glm-4.7-flash": { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
+  "zai-org/glm-4.6": { input: 3.5, output: 14, cacheWrite: 3.5, cacheRead: 3.5 },
+  "zhipu/glm-4.6": { input: 3.5, output: 14, cacheWrite: 3.5, cacheRead: 3.5 },   // alias
+  // DeepSeek
+  "deepseek-ai/deepseek-v3.2": { input: 2, output: 3, cacheWrite: 2, cacheRead: 2 },
+  "deepseek-ai/deepseek-v3": { input: 2, output: 8, cacheWrite: 2, cacheRead: 2 },
+  "deepseek-ai/deepseek-r1": { input: 4, output: 16, cacheWrite: 4, cacheRead: 4 },
+  // Kimi (Moonshot)
+  "moonshotai/kimi-k2.5": { input: 4, output: 21, cacheWrite: 4, cacheRead: 4 },
+  "pro/moonshotai/kimi-k2.5": { input: 4, output: 21, cacheWrite: 4, cacheRead: 4 },   // alias
+  "moonshotai/kimi-k2-instruct-0905": { input: 4, output: 16, cacheWrite: 4, cacheRead: 4 },
+  // Qwen (Alibaba) — SiliconFlow
+  "qwen/qwen3-coder-480b-a35b": { input: 8, output: 16, cacheWrite: 8, cacheRead: 8 },
+  "qwen/qwen3-coder-30b-a3b": { input: 0.7, output: 2.8, cacheWrite: 0.7, cacheRead: 0.7 },
+  // Qwen (Alibaba) — 阿里云百炼 (0-128K tier)
+  "qwen3.5-plus": { input: 0.8, output: 4.8, cacheWrite: 0.8, cacheRead: 0.8 },
+
   // Default fallback (Sonnet pricing)
   "default": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
 };
@@ -83,6 +114,7 @@ export interface CostInfo {
   tokens: number;
   timeRange: CostTimeRange;
   isEstimate: boolean;
+  currency: "USD" | "CNY";
 }
 
 interface LogEntry {
@@ -99,13 +131,17 @@ interface LogEntry {
 }
 
 function getPricing(model: string) {
-  // Try exact match first
+  const lower = model.toLowerCase();
+  // Try exact match first (case-insensitive)
+  if (MODEL_PRICING[lower]) {
+    return MODEL_PRICING[lower];
+  }
   if (MODEL_PRICING[model]) {
     return MODEL_PRICING[model];
   }
-  // Try prefix match
+  // Try prefix match (case-insensitive)
   for (const key of Object.keys(MODEL_PRICING)) {
-    if (model.startsWith(key) || key.startsWith(model)) {
+    if (lower.startsWith(key) || key.startsWith(lower)) {
       return MODEL_PRICING[key];
     }
   }
@@ -134,6 +170,57 @@ function calculateEntryCost(entry: LogEntry): number {
   return inputCost + outputCost + cacheWriteCost + cacheReadCost;
 }
 
+// Get current model from environment
+function getCurrentModel(): string {
+  return process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || "claude-opus-4-5";
+}
+
+// Determine currency based on model/provider
+function getModelCurrency(model: string): "USD" | "CNY" {
+  const lower = model.toLowerCase();
+
+  // Chinese providers/models use CNY
+  const cnyPatterns = [
+    /^pro\/zai-org\//,        // SiliconFlow Pro models (GLM-5, GLM-4.7)
+    /^zai-org\//,             // Z.AI models (GLM-4.6)
+    /^zhipu\//,               // Zhipu models
+    /^deepseek-ai\//,         // DeepSeek
+    /^moonshotai\//,          // Kimi
+    /^qwen\//,                // Qwen models
+    /qwen3\.5/,               // Qwen3.5 (Alibaba Cloud)
+    /dashscope/,              // Alibaba Cloud
+  ];
+
+  for (const pattern of cnyPatterns) {
+    if (pattern.test(lower)) {
+      return "CNY";
+    }
+  }
+
+  return "USD";
+}
+
+// Check if entry matches current model (case-insensitive, prefix match)
+function matchesModel(entryModel: string, currentModel: string): boolean {
+  const entry = entryModel.toLowerCase();
+  const current = currentModel.toLowerCase();
+
+  // Exact match
+  if (entry === current) return true;
+
+  // Prefix match (e.g., "claude-opus-4-5-20251101" matches "claude-opus-4-5")
+  if (entry.startsWith(current) || current.startsWith(entry)) return true;
+
+  // Handle vendor prefixes (e.g., "Pro/zai-org/GLM-5" matches "GLM-5")
+  const stripPrefix = (m: string) => m.replace(/^(Pro\/)?(zhipu|zai-org|deepseek-ai|moonshotai|Qwen)\//i, "");
+  const strippedEntry = stripPrefix(entry);
+  const strippedCurrent = stripPrefix(current);
+  if (strippedEntry === strippedCurrent) return true;
+  if (strippedEntry.startsWith(strippedCurrent) || strippedCurrent.startsWith(strippedEntry)) return true;
+
+  return false;
+}
+
 export class CostProvider {
   private cacheDir: string;
   private readonly FILE_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes file cache
@@ -158,31 +245,34 @@ export class CostProvider {
 
   async getCostInfo(timeRange: CostTimeRange = "month"): Promise<CostInfo> {
     const now = Date.now();
+    const currentModel = getCurrentModel();
+    const currency = getModelCurrency(currentModel);
 
     // Try file cache first (cross-process sharing)
-    const fileCache = readCostCache(timeRange);
+    const fileCache = readCostCache(timeRange, currentModel);
     if (fileCache && (now - fileCache.timestamp) < this.FILE_CACHE_TTL_MS) {
       debug(`Using file cached cost data (age: ${Math.round((now - fileCache.timestamp) / 1000)}s)`);
-      return { cost: fileCache.cost, tokens: fileCache.tokens, timeRange, isEstimate: false };
+      return { cost: fileCache.cost, tokens: fileCache.tokens, timeRange, isEstimate: false, currency };
     }
 
     try {
-      const costInfo = await this.calculateCostsIncremental(timeRange, fileCache);
+      const costInfo = await this.calculateCostsIncremental(timeRange, currentModel, fileCache);
       return costInfo;
     } catch (error) {
       debug("Error calculating costs:", error);
       // Return stale cache if available
       if (fileCache) {
-        return { cost: fileCache.cost, tokens: fileCache.tokens, timeRange, isEstimate: true };
+        return { cost: fileCache.cost, tokens: fileCache.tokens, timeRange, isEstimate: true, currency };
       }
-      return { cost: 0, tokens: 0, timeRange, isEstimate: true };
+      return { cost: 0, tokens: 0, timeRange, isEstimate: true, currency };
     }
   }
 
-  private async calculateCostsIncremental(timeRange: CostTimeRange, existingCache: CostCacheData | null): Promise<CostInfo> {
+  private async calculateCostsIncremental(timeRange: CostTimeRange, currentModel: string, existingCache: CostCacheData | null): Promise<CostInfo> {
+    const currency = getModelCurrency(currentModel);
     if (!fs.existsSync(this.cacheDir)) {
       debug("Claude projects directory not found");
-      return { cost: 0, tokens: 0, timeRange, isEstimate: true };
+      return { cost: 0, tokens: 0, timeRange, isEstimate: true, currency };
     }
 
     const cutoff = this.getTimeRangeCutoff(timeRange);
@@ -217,7 +307,7 @@ export class CostProvider {
         }
 
         // Process the file
-        const { cost, tokens } = this.processFile(file, cutoff);
+        const { cost, tokens } = this.processFile(file, cutoff, currentModel);
         totalCost += cost;
         totalTokens += tokens;
         processedFiles[file] = { mtime, cost, tokens };
@@ -228,21 +318,22 @@ export class CostProvider {
       }
     }
 
-    debug(`Cost (${timeRange}): $${totalCost.toFixed(2)}, Tokens: ${totalTokens} (processed: ${filesProcessed}, skipped: ${filesSkipped})`);
+    debug(`Cost (${timeRange}, ${currentModel}): $${totalCost.toFixed(2)}, Tokens: ${totalTokens} (processed: ${filesProcessed}, skipped: ${filesSkipped})`);
 
     // Save to file cache
-    writeCostCache(timeRange, {
+    writeCostCache(timeRange, currentModel, {
       cost: totalCost,
       tokens: totalTokens,
       timeRange,
+      model: currentModel,
       timestamp: Date.now(),
       processedFiles,
     });
 
-    return { cost: totalCost, tokens: totalTokens, timeRange, isEstimate: false };
+    return { cost: totalCost, tokens: totalTokens, timeRange, isEstimate: false, currency };
   }
 
-  private processFile(file: string, cutoff: Date | null): { cost: number; tokens: number } {
+  private processFile(file: string, cutoff: Date | null, currentModel: string): { cost: number; tokens: number } {
     let cost = 0;
     let tokens = 0;
 
@@ -256,6 +347,10 @@ export class CostProvider {
 
           // Skip non-message entries
           if (!entry.message?.usage) continue;
+
+          // Filter by current model
+          const entryModel = entry.message?.model;
+          if (!entryModel || !matchesModel(entryModel, currentModel)) continue;
 
           // Check if within time range
           if (cutoff && entry.timestamp) {

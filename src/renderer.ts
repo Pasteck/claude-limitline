@@ -415,9 +415,11 @@ export class Renderer {
 
     const cost = ctx.costInfo.cost;
     const tokens = ctx.costInfo.tokens;
+    const currency = ctx.costInfo.currency;
 
-    // Format cost: $0.00 for small, $1.23 for normal
-    const costStr = cost < 0.01 ? "$0.00" : `$${cost.toFixed(2)}`;
+    // Format cost with appropriate currency symbol
+    const symbol = currency === "CNY" ? "¥" : "$";
+    const costStr = cost < 0.01 ? `${symbol}0.00` : `${symbol}${cost.toFixed(2)}`;
 
     // Format tokens: 1.2M, 500k, etc.
     let tokenStr: string;
