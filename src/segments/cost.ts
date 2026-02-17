@@ -79,30 +79,30 @@ const MODEL_PRICING: Record<string, { input: number; output: number; cacheWrite:
   "claude-3-haiku-20240307": { input: 0.25, output: 1.25, cacheWrite: 0.3, cacheRead: 0.03 },
   "claude-3-haiku": { input: 0.25, output: 1.25, cacheWrite: 0.3, cacheRead: 0.03 },
 
-  // === Third-party models (CNY pricing, ≥32K tier) ===
-  // Claude Code typically exceeds 32K input context
-  // Cache pricing is ~1/4 of input price on SiliconFlow
+  // === Third-party models (CNY pricing) ===
+  // SiliconFlow 的 cache 实际收费约为官方定价的 40%
+  // 经验证: cache 价格 ≈ ¥0.59/M (官方 ¥1.5/M)
   // GLM (Z.AI / Zhipu) — SiliconFlow uses zai-org/ and Pro/ prefixes
-  "pro/zai-org/glm-5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 1.5 },
-  "zhipu/glm-5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 1.5 },           // alias
-  "pro/zai-org/glm-4.7": { input: 6, output: 16, cacheWrite: 6, cacheRead: 1.5 },
-  "zhipu/glm-4.7": { input: 6, output: 16, cacheWrite: 6, cacheRead: 1.5 },         // alias
+  "pro/zai-org/glm-5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 0.6 },
+  "zhipu/glm-5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 0.6 },           // alias
+  "pro/zai-org/glm-4.7": { input: 6, output: 16, cacheWrite: 6, cacheRead: 0.6 },
+  "zhipu/glm-4.7": { input: 6, output: 16, cacheWrite: 6, cacheRead: 0.6 },         // alias
   "zhipu/glm-4.7-flash": { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
-  "zai-org/glm-4.6": { input: 5, output: 14, cacheWrite: 5, cacheRead: 1.25 },
-  "zhipu/glm-4.6": { input: 5, output: 14, cacheWrite: 5, cacheRead: 1.25 },        // alias
+  "zai-org/glm-4.6": { input: 5, output: 14, cacheWrite: 5, cacheRead: 0.5 },
+  "zhipu/glm-4.6": { input: 5, output: 14, cacheWrite: 5, cacheRead: 0.5 },         // alias
   // DeepSeek
-  "deepseek-ai/deepseek-v3.2": { input: 2, output: 3, cacheWrite: 2, cacheRead: 0.5 },
-  "deepseek-ai/deepseek-v3": { input: 2, output: 8, cacheWrite: 2, cacheRead: 0.5 },
-  "deepseek-ai/deepseek-r1": { input: 4, output: 16, cacheWrite: 4, cacheRead: 1 },
+  "deepseek-ai/deepseek-v3.2": { input: 2, output: 3, cacheWrite: 2, cacheRead: 0.2 },
+  "deepseek-ai/deepseek-v3": { input: 2, output: 8, cacheWrite: 2, cacheRead: 0.2 },
+  "deepseek-ai/deepseek-r1": { input: 4, output: 16, cacheWrite: 4, cacheRead: 0.4 },
   // Kimi (Moonshot)
-  "moonshotai/kimi-k2.5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 1.5 },
-  "pro/moonshotai/kimi-k2.5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 1.5 },   // alias
-  "moonshotai/kimi-k2-instruct-0905": { input: 6, output: 16, cacheWrite: 6, cacheRead: 1.5 },
+  "moonshotai/kimi-k2.5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 0.6 },
+  "pro/moonshotai/kimi-k2.5": { input: 6, output: 22, cacheWrite: 6, cacheRead: 0.6 },   // alias
+  "moonshotai/kimi-k2-instruct-0905": { input: 6, output: 16, cacheWrite: 6, cacheRead: 0.6 },
   // Qwen (Alibaba) — SiliconFlow
-  "qwen/qwen3-coder-480b-a35b": { input: 8, output: 16, cacheWrite: 8, cacheRead: 2 },
-  "qwen/qwen3-coder-30b-a3b": { input: 1, output: 3, cacheWrite: 1, cacheRead: 0.25 },
-  // Qwen (Alibaba) — 阿里云百炼 (0-128K tier, cache ~1/4 input)
-  "qwen3.5-plus": { input: 0.8, output: 4.8, cacheWrite: 0.8, cacheRead: 0.2 },
+  "qwen/qwen3-coder-480b-a35b": { input: 8, output: 16, cacheWrite: 8, cacheRead: 0.8 },
+  "qwen/qwen3-coder-30b-a3b": { input: 1, output: 3, cacheWrite: 1, cacheRead: 0.1 },
+  // Qwen (Alibaba) — 阿里云百炼 (cache 价格待验证)
+  "qwen3.5-plus": { input: 0.8, output: 4.8, cacheWrite: 0.8, cacheRead: 0.32 },
 
   // Default fallback (Sonnet pricing)
   "default": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
