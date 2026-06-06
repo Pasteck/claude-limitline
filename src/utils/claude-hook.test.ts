@@ -95,4 +95,51 @@ describe("formatModelName", () => {
       expect(formatModelName("short-model")).toBe("short-model");
     });
   });
+
+  // Regression: the version used to be matched against a hardcoded ladder
+  // (4-5, 4-6, 4-7 …), so every new release silently fell back to "Opus 4"
+  // until someone patched the list. These lock in generic version parsing.
+  describe("version parsing is future-proof (no hardcoded ladder)", () => {
+    it("formats claude-opus-4-8 as Opus 4.8", () => {
+      expect(formatModelName("claude-opus-4-8")).toBe("Opus 4.8");
+    });
+
+    it("formats claude-opus-4-7 as Opus 4.7", () => {
+      expect(formatModelName("claude-opus-4-7")).toBe("Opus 4.7");
+    });
+
+    it("formats claude-sonnet-4-6 as Sonnet 4.6", () => {
+      expect(formatModelName("claude-sonnet-4-6")).toBe("Sonnet 4.6");
+    });
+
+    it("formats a hypothetical future claude-opus-5-2 as Opus 5.2", () => {
+      expect(formatModelName("claude-opus-5-2")).toBe("Opus 5.2");
+    });
+
+    it("formats a hypothetical future claude-sonnet-5 as Sonnet 5", () => {
+      expect(formatModelName("claude-sonnet-5")).toBe("Sonnet 5");
+    });
+
+    it("does not mistake an 8-digit date for a minor version", () => {
+      expect(formatModelName("claude-opus-4-20250514")).toBe("Opus 4");
+    });
+  });
+
+  describe("1M context variant", () => {
+    it("strips the [1m] suffix without surfacing a 1M marker", () => {
+      expect(formatModelName("claude-opus-4-8[1m]")).toBe("Opus 4.8");
+    });
+
+    it("strips [1m] before parsing the version", () => {
+      expect(formatModelName("claude-sonnet-4-5[1m]")).toBe("Sonnet 4.5");
+    });
+
+    it("ID parsing wins over a verbose display name", () => {
+      expect(formatModelName("claude-opus-4-8[1m]", "Opus 4.8 (1M context)")).toBe("Opus 4.8");
+    });
+
+    it("drops a trailing (1M context) from a display name", () => {
+      expect(formatModelName("model-id", "Opus 4.8 (1M context)")).toBe("Opus 4.8");
+    });
+  });
 });

@@ -1,7 +1,7 @@
 import { execSync } from "child_process";
 import { basename } from "path";
 import { debug } from "./logger.js";
-import { type ClaudeHookData, formatModelName } from "./claude-hook.js";
+import { type ClaudeHookData, formatModelName, getModelContextWindow } from "./claude-hook.js";
 
 /**
  * Get the current directory/repo name
@@ -88,9 +88,15 @@ export interface EnvironmentInfo {
  */
 export function getContextPercent(hookData?: ClaudeHookData | null): number {
   const ctx = hookData?.context_window;
-  if (!ctx?.current_usage || !ctx.context_window_size) {
+  if (!ctx?.current_usage) {
     return 0;
   }
+
+  // Get model from hook data
+  const modelId = hookData?.model?.id || "";
+
+  // Use our override if available, otherwise fall back to API value
+  const contextWindowSize = getModelContextWindow(modelId, ctx.context_window_size);
 
   const usage = ctx.current_usage;
   const totalTokens =
@@ -98,7 +104,7 @@ export function getContextPercent(hookData?: ClaudeHookData | null): number {
     (usage.cache_creation_input_tokens || 0) +
     (usage.cache_read_input_tokens || 0);
 
-  return Math.round((totalTokens / ctx.context_window_size) * 100);
+  return Math.round((totalTokens / contextWindowSize) * 100);
 }
 
 /**

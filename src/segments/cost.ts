@@ -58,10 +58,11 @@ function writeCostCache(timeRange: CostTimeRange, model: string, data: CostCache
 // Model pricing per million tokens (USD)
 const MODEL_PRICING: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }> = {
   // === Claude (Anthropic) ===
-  // Opus 4.5 / 4.6
+  // Opus 4.5 / 4.6 / 4.7
   "claude-opus-4-5-20251101": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   "claude-opus-4-5": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   "claude-opus-4-6": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
+  "claude-opus-4-7": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   // Opus 4
   "claude-opus-4-20250514": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   "claude-opus-4": { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
@@ -132,13 +133,15 @@ interface LogEntry {
 }
 
 function getPricing(model: string) {
-  const lower = model.toLowerCase();
+  // Strip [1m] suffix before lookup
+  const cleaned = model.replace(/\[1m\]/gi, "");
+  const lower = cleaned.toLowerCase();
   // Try exact match first (case-insensitive)
   if (MODEL_PRICING[lower]) {
     return MODEL_PRICING[lower];
   }
-  if (MODEL_PRICING[model]) {
-    return MODEL_PRICING[model];
+  if (MODEL_PRICING[cleaned]) {
+    return MODEL_PRICING[cleaned];
   }
   // Try prefix match (case-insensitive)
   for (const key of Object.keys(MODEL_PRICING)) {
@@ -173,12 +176,12 @@ function calculateEntryCost(entry: LogEntry): number {
 
 // Get current model from environment
 function getCurrentModel(): string {
-  return process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || "claude-opus-4-5";
+  return process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || "claude-opus-4-6";
 }
 
 // Determine currency based on model/provider
 function getModelCurrency(model: string): "USD" | "CNY" {
-  const lower = model.toLowerCase();
+  const lower = model.replace(/\[1m\]/gi, "").toLowerCase();
 
   // Chinese providers/models use CNY
   const cnyPatterns = [
@@ -201,25 +204,49 @@ function getModelCurrency(model: string): "USD" | "CNY" {
   return "USD";
 }
 
-// Check if entry matches current model (case-insensitive, prefix match)
+// Extract model family for grouping (e.g., "claude-opus-4-6" → "claude-opus")
+// This ensures different versions of the same model are counted together
+function getModelFamily(model: string): string {
+  const lower = model.toLowerCase();
+
+  // Strip [1m] and similar suffixes
+  const cleaned = lower.replace(/\[1m\]/g, "");
+
+  // Claude models: group by tier (opus, sonnet, haiku)
+  const claudeMatch = cleaned.match(/^claude-(opus|sonnet|haiku)/);
+  if (claudeMatch) return `claude-${claudeMatch[1]}`;
+
+  // Third-party: strip vendor prefixes and version suffixes
+  const stripped = cleaned.replace(/^(pro\/)?(zhipu|zai-org|deepseek-ai|moonshotai|qwen)\//i, "");
+
+  // GLM family: glm-5, glm-4.7, glm-4.6 are separate products
+  const glmMatch = stripped.match(/^glm-(\d+\.?\d*)/);
+  if (glmMatch) return `glm-${glmMatch[1]}`;
+
+  // DeepSeek: v3, v3.2, r1 are separate products
+  const dsMatch = stripped.match(/^deepseek-(v\d+\.?\d*|r\d+)/);
+  if (dsMatch) return `deepseek-${dsMatch[1]}`;
+
+  // Qwen: qwen3.5-plus, qwen3-coder-480b etc. are separate
+  const qwenMatch = stripped.match(/^(qwen\S+)/);
+  if (qwenMatch) return qwenMatch[1];
+
+  // Kimi
+  const kimiMatch = stripped.match(/^(kimi-k\d+\.?\d*)/);
+  if (kimiMatch) return kimiMatch[1];
+
+  return cleaned;
+}
+
+// Check if entry matches current model (family-based matching)
 function matchesModel(entryModel: string, currentModel: string): boolean {
-  const entry = entryModel.toLowerCase();
-  const current = currentModel.toLowerCase();
+  // When using official Claude (no CLAUDE_MODEL set), count ALL Claude models
+  // This handles the common case where user is on subscription and uses opus/sonnet/haiku
+  if (!process.env.CLAUDE_MODEL && !process.env.ANTHROPIC_MODEL) {
+    return entryModel.toLowerCase().startsWith("claude-");
+  }
 
-  // Exact match
-  if (entry === current) return true;
-
-  // Prefix match (e.g., "claude-opus-4-5-20251101" matches "claude-opus-4-5")
-  if (entry.startsWith(current) || current.startsWith(entry)) return true;
-
-  // Handle vendor prefixes (e.g., "Pro/zai-org/GLM-5" matches "GLM-5")
-  const stripPrefix = (m: string) => m.replace(/^(Pro\/)?(zhipu|zai-org|deepseek-ai|moonshotai|Qwen)\//i, "");
-  const strippedEntry = stripPrefix(entry);
-  const strippedCurrent = stripPrefix(current);
-  if (strippedEntry === strippedCurrent) return true;
-  if (strippedEntry.startsWith(strippedCurrent) || strippedCurrent.startsWith(strippedEntry)) return true;
-
-  return false;
+  return getModelFamily(entryModel) === getModelFamily(currentModel);
 }
 
 export class CostProvider {
@@ -277,14 +304,30 @@ export class CostProvider {
     }
 
     const cutoff = this.getTimeRangeCutoff(timeRange);
-    let totalCost = existingCache?.cost || 0;
-    let totalTokens = existingCache?.tokens || 0;
+
+    // For time-bounded ranges (5h, month), invalidate cache when cutoff changes significantly
+    // This prevents stale values when crossing time boundaries (e.g., new month)
+    const shouldFullReprocess = existingCache && cutoff && this.cutoffChanged(existingCache, cutoff);
+
+    let totalCost = shouldFullReprocess ? 0 : (existingCache?.cost || 0);
+    let totalTokens = shouldFullReprocess ? 0 : (existingCache?.tokens || 0);
     const processedFiles: Record<string, { mtime: number; cost: number; tokens: number }> =
-      existingCache?.processedFiles || {};
+      shouldFullReprocess ? {} : { ...(existingCache?.processedFiles || {}) };
 
     // Find all JSONL files
     const jsonlFiles = this.findJsonlFiles(this.cacheDir);
+    const currentFileSet = new Set(jsonlFiles);
     debug(`Found ${jsonlFiles.length} JSONL files`);
+
+    // Remove deleted files from cache
+    for (const cachedFile of Object.keys(processedFiles)) {
+      if (!currentFileSet.has(cachedFile)) {
+        totalCost -= processedFiles[cachedFile].cost;
+        totalTokens -= processedFiles[cachedFile].tokens;
+        delete processedFiles[cachedFile];
+        debug(`Removed deleted file from cache: ${cachedFile}`);
+      }
+    }
 
     let filesProcessed = 0;
     let filesSkipped = 0;
@@ -319,6 +362,10 @@ export class CostProvider {
       }
     }
 
+    // Ensure no negative drift from floating point
+    if (totalCost < 0) totalCost = 0;
+    if (totalTokens < 0) totalTokens = 0;
+
     debug(`Cost (${timeRange}, ${currentModel}): $${totalCost.toFixed(2)}, Tokens: ${totalTokens} (processed: ${filesProcessed}, skipped: ${filesSkipped})`);
 
     // Save to file cache
@@ -334,6 +381,12 @@ export class CostProvider {
     return { cost: totalCost, tokens: totalTokens, timeRange, isEstimate: false, currency };
   }
 
+  private cutoffChanged(cache: CostCacheData, currentCutoff: Date): boolean {
+    // If cache was created before the current cutoff, the time window has shifted
+    // and cached per-file values may include entries outside the new window
+    return cache.timestamp < currentCutoff.getTime();
+  }
+
   private processFile(file: string, cutoff: Date | null, currentModel: string): { cost: number; tokens: number } {
     let cost = 0;
     let tokens = 0;
@@ -342,30 +395,47 @@ export class CostProvider {
       const content = fs.readFileSync(file, "utf-8");
       const lines = content.split("\n").filter(line => line.trim());
 
+      // Deduplicate by requestId: keep only the last entry per API call
+      // Claude Code writes multiple JSONL entries per streaming response,
+      // each with the SAME input/cache tokens but growing output tokens.
+      // We must only count each request once.
+      const requestEntries = new Map<string, LogEntry>();
+
       for (const line of lines) {
         try {
-          const entry = JSON.parse(line) as LogEntry;
+          const raw = JSON.parse(line);
+          if (!raw.message?.usage) continue;
 
-          // Skip non-message entries
-          if (!entry.message?.usage) continue;
-
-          // Filter by current model
-          const entryModel = entry.message?.model;
+          const entryModel = raw.message?.model;
           if (!entryModel || !matchesModel(entryModel, currentModel)) continue;
 
-          // Check if within time range
-          if (cutoff && entry.timestamp) {
-            const entryTime = new Date(entry.timestamp);
+          if (cutoff && raw.timestamp) {
+            const entryTime = new Date(raw.timestamp);
             if (entryTime < cutoff) continue;
           }
 
-          cost += calculateEntryCost(entry);
-          const usage = entry.message!.usage!;
-          tokens += (usage.input_tokens || 0) + (usage.output_tokens || 0) +
-                    (usage.cache_creation_input_tokens || 0);
+          const reqId = raw.requestId;
+          if (reqId) {
+            // Keep last entry per request (has the final output_tokens)
+            requestEntries.set(reqId, raw as LogEntry);
+          } else {
+            // No requestId — count directly (legacy format)
+            cost += calculateEntryCost(raw as LogEntry);
+            const usage = raw.message!.usage!;
+            tokens += (usage.input_tokens || 0) + (usage.output_tokens || 0) +
+                      (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+          }
         } catch {
           // Skip invalid JSON lines
         }
+      }
+
+      // Process deduplicated entries
+      for (const entry of requestEntries.values()) {
+        cost += calculateEntryCost(entry);
+        const usage = entry.message!.usage!;
+        tokens += (usage.input_tokens || 0) + (usage.output_tokens || 0) +
+                  (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
       }
     } catch (error) {
       debug(`Error reading file ${file}:`, error);
